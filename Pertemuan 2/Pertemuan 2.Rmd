@@ -1,0 +1,247 @@
+---
+title: "Tugas Praktikum 2 Regresi"
+author: "Nadila Putri Fauziyyah"
+date: "2023-09-05"
+output: html_document
+---
+
+## Pemanggilan *Packages*
+
+```{r}
+library(dplyr)
+library(TTR)
+library(forecast)
+library(lmtest) #digunakan untuk uji formal pendeteksian autokorelasi
+library(orcutt) #untuk membuat model regresi Cochrane-Orcutt
+library(HoRM) #untuk membuat model regresi Hildreth-Lu
+```
+
+## Impor Data
+
+```{r}
+library(rio)
+data_delhi <- import("https://raw.githubusercontent.com/nadilaputrif/MPDW-NadilaPF/main/Pertemuan%202/data_delhi.csv")
+```
+
+## Input Data
+
+Data yang digunakan dalam kesempatan kali ini adalah data AQI (Air Quality Index) dari Kota New Delhi.
+
+```{r}
+AQI <- data_delhi$Y
+CO2 <- data_delhi$CO2
+NO2 <- data_delhi$NO2
+O3 <- data_delhi$O3
+PM10 <- data_delhi$PM10
+PM25<- data_delhi$PM25
+
+data_delhi <- data.frame(AQI, CO2, NO2, O3, PM10, PM25)
+data_delhi
+```
+
+## Eksplorasi Data
+
+Melakukan eksplorasi data dengan membuat matriks korelasi antar peubah untuk mengetahui pola sebaran data dan hubungan antar peubah
+
+```{r}
+#pair plot
+library(ggplot2)
+library(GGally)
+ggpairs(data_delhi)
+```
+```{r}
+#Membentuk objek time series
+data.ts<-ts(data_delhi$AQI)
+data.ts
+
+#Membuat plot time series
+ts.plot(data.ts, xlab="Time Period ", ylab="AQI", main= "Time Series Plot of AQI")
+points(data.ts)
+```
+
+## Regresi
+
+```{r}
+#Pembuatan Model Regresi
+#model regresi
+model<- lm(AQI~CO2+NO2+O3+PM10+PM25, data = data_delhi)
+summary(model)
+```
+
+Model yang dihasilkan adalah $$AQI=-13.28173+0.04797CO2+12.71872NO2+0.47944O3-0.043667PM10+1.13447PM25$$ Berdasarkan ringkasan model dapat diketahui bahwa hasil uji F memiliki *p-value* (< 2.2e-16) \< $\alpha$ (5%). Artinya, minimal terdapat satu variabel yang berpengaruh nyata terhadap model. Hasil uji-t parsial kedua parameter regresi, yaitu intersep dan koefisien regresi juga menunjukkan hal yang sama, yaitu memiliki *p-value* \< $\alpha$ (5%) sehingga nyata dalam taraf 5%, kecuali peubah PM10 yang memiliki *p-value* (0.186917) \> $\alpha$ (5%). Selanjutnya dapat dilihat juga nilai $R^2=0.9866$. Artinya, sebesar 98.66% keragaman nilai AQI dapat dijelaskan oleh semua peubah penjelas. Hasil ini menunjukkan hasil yang bagus, seolah mendapatkan hasil terbaik. Namun, kita perlu melakukan uji terhadap sisaannya seperti berikut ini.
+
+```{r}
+#sisaan dan fitted value
+sisaan<- residuals(model)
+fitValue<- predict(model)
+
+#Diagnostik dengan eksploratif
+par(mfrow = c(2,2))
+qqnorm(sisaan)
+qqline(sisaan, col = "steelblue", lwd = 2)
+plot(fitValue, sisaan, col = "steelblue", pch = 20, xlab = "Sisaan", ylab = "Fitted Values", main = "Sisaan vs Fitted Values")
+abline(a = 0, b = 0, lwd = 2)
+hist(sisaan, col = "steelblue")
+plot(seq(1,72,1), sisaan, col = "steelblue", pch = 20, xlab = "Sisaan", ylab = "Order", main = "Sisaan vs Order")
+lines(seq(1,72,1), sisaan, col = "red")
+abline(a = 0, b = 0, lwd = 2)
+```
+
+Dua plot di samping kiri digunakan untuk melihat apakah sisaan menyebar normal. Normal Q-Q Plot di atas menunjukkan bahwa sisaan cenderung menyebar normal. Selanjutnya, dua plot di samping kanan digunakan untuk melihat autokorelasi. Plot Sisaan vs *Fitted Value* dan Plot Sisaan vs *Order* menunjukkan adanya pola pada sisaan. Untuk lebih lanjut akan digunakan uji formal melihat normalitas sisaan dan plot ACF dan PACF untuk melihat apakah ada autokorelasi atau tidak.
+
+```{r}
+#Melihat Sisaan Menyebar Normal/Tidak
+#H0: sisaan mengikuti sebaran normal
+#H1: sisaan tidak mengikuti sebaran normal
+shapiro.test(sisaan)
+ks.test(sisaan, "pnorm", mean=mean(sisaan), sd=sd(sisaan))
+```
+Berdasarkan uji formal Saphiro-Wilk dan Kolmogorov-Smirnov didapatkan nilai *p-value* (0.3896 & 0.5826) \> $\alpha$ (5%). Artinya, cukup bukti untuk menyatakan sisaan berdistribusi normal.
+
+```{r}
+#ACF dan PACF identifikasi autokorelasi
+par(mfrow = c(1,2))
+acf(sisaan)
+pacf(sisaan)
+```
+
+Berdasarkan plot ACF dan PACF, terlihat semua dalam rentang batas dan tidak ada yang signifikan. Namun, untuk lebih memastikan akan dilakukan uji formal dengan uji Durbin Watson.
+
+```{r}
+#Deteksi autokorelasi dengan uji-Durbin Watson
+#H0: tidak ada autokorelasi
+#H1: ada autokorelasi
+dwtest(model)
+```
+
+Berdasarkan hasil DW Test, didapatkan nilai $DW = 1.4097$ dan *p-value* = $0.0008478$. Berdasarkan tabel Durbin-Watson diperoleh nilai $DL = 1.4732$ dan $DU = 1.7688$. Nilai DW berada di bawah nilai DL. Artinya, berada di daerah autokorelasi positif dan dengan nilai *p-value* \< 0.05 dapat disimpulkan bahwa tolak H0, cukup bukti mengatakan adanya autokorelasi. Oleh karena itu, diperlukan penangan autokorelasi.
+
+## Penanganan Autokorelasi
+
+### Metode Cochrane-Orcutt
+```{r}
+#Penanganan Autokorelasi Cochrane-Orcutt
+modelCO<-cochrane.orcutt(model)
+modelCO
+```
+
+Hasil keluaran model setelah dilakukan penanganan adalah sebagai berikut. $$AQI=-6.359411+0.018182CO2+7.949804NO2+0.479752O3-0.023348PM10+0.695402PM25$$ Hasil juga menunjukkan bahwa nilai DW dan p-value meningkat menjadi $2.39234$ dan $0.8686$. Nilai DW sudah berada pada rentang DU \< DW \< 4-DU atau $1.4732 < DW < 1.7688$. Hal tersebut juga didukung dengan nilai *p-value* \> 0.05, artinya belum cukup bukti menyatakan bahwa sisaan terdapat autokorelasi pada taraf nyata 5%. Untuk nilai $ρ ̂$ optimum yang digunakan adalah $0.2913655$. Nilai tersebut dapat diketahui dengan *syntax* berikut.
+
+```{r}
+#Rho optimum
+rho<- modelCO$rho
+rho
+```
+
+Selanjutnya akan dilakukan transformasi secara manual dengan syntax berikut ini.
+
+```{r}
+#Transformasi Manual
+AQI.trans <- AQI[-1]-AQI[-72]*rho
+CO2.trans <- CO2[-1]-CO2[-72]*rho
+NO2.trans <- NO2[-1]-NO2[-72]*rho
+O3.trans <- O3[-1]-O3[-72]*rho
+PM10.trans <- PM10[-1]-PM10[-72]*rho
+PM25.trans <- PM25[-1]-PM25[-72]*rho
+modelCOmanual <- lm(AQI.trans ~ CO2.trans + NO2.trans + O3.trans + PM10.trans + PM25.trans)
+summary(modelCOmanual)
+```
+
+
+Hasil model transformasi bukan merupakan model sesungguhnya. Koefisien regresi masih perlu dicari kembali mengikuti $β_0^*=β_0+ρ ̂β_0$ dan $β_1^*=β_1$.
+
+```{r}
+#Mencari Penduga Koefisien Regresi setelah Transformasi ke Persamaan Awal
+b0bintang <- modelCOmanual$coefficients[-2]
+b0 <- b0bintang/(1-rho)
+b1 <- modelCOmanual$coefficients[-1]
+b0
+b1
+```
+
+Hasil perhitungan koefisien regresi tersebut akan menghasilkan hasil yang sama dengan model yang dihasilkan menggunakan *packages*.
+
+### Metode Hildreth-Lu
+```{r}
+#Penanganan Autokorelasi Hildreth lu
+# Hildreth-Lu
+hildreth.lu.func<- function(r, model){
+  x1 <- model.matrix(model)[,2]
+  x2 <- model.matrix(model)[,3]
+  x3 <- model.matrix(model)[,4]
+  x4 <- model.matrix(model)[,5]
+  x5 <- model.matrix(model)[,6]
+  
+  y <- model.response(model.frame(model))
+  n <- length(y)
+  t <- 2:n
+  y <- y[t]-r*y[t-1]
+  x1 <- x1[t]-r*x1[t-1]
+  x2 <- x2[t]-r*x2[t-1]
+  x3 <- x3[t]-r*x3[t-1]
+  x4 <- x4[t]-r*x4[t-1]
+  x5 <- x5[t]-r*x5[t-1]
+  
+  return(lm(y~x1+x2+x3+x4+x5))
+}
+
+#Pencariab rho yang meminimumkan SSE
+r <- c(seq(0.1,0.9, by= 0.1))
+tab <- data.frame("rho" = r, "SSE" = sapply(r, function(i){deviance(hildreth.lu.func(i, model))}))
+round(tab, 4)
+```
+
+Pada hasil di atas terlihat $ρ$ minimum ketika 0.3. Namun, hasil tersebut masih kurang teliti sehingga akan dicari kembali $ρ$ yang lebih optimum dengan ketelitian yang lebih. Jika sebelumnya jarak antar $ρ$ yang dicari adalah 0.3, kali ini jarak antar $ρ$ adalah 0.001 dan dilakukan pada selang 0.1 sampai dengan 0.9.
+
+```{r}
+#Rho optimal di sekitar 0.3
+rOpt <- seq(0.1,0.9, by= 0.001)
+tabOpt <- data.frame("rho" = rOpt, "SSE" = sapply(rOpt, function(i){deviance(hildreth.lu.func(i, model))}))
+head(tabOpt[order(tabOpt$SSE),])
+
+#Grafik SSE optimum
+par(mfrow = c(1,1))
+plot(tab$SSE ~ tab$rho , type = "l", xlab = "Rho", ylab = "SSE")
+abline(v = tabOpt[tabOpt$SSE==min(tabOpt$SSE),"rho"], lty = 2, col="red",lwd=2)
+text(x=0.291, y=7.136652, labels = "rho=0.291", cex = 0.8)
+```
+
+Perhitungan yang dilakukan aplikasi `R` menunjukkan bahwa nilai $ρ$ optimum, yaitu saat SSE terkecil terdapat pada nilai $ρ=0.291$. Hal tersebut juga ditunjukkan pada plot. Selanjutnya, model dapat didapatkan dengan mengevaluasi nilai $ρ$ ke dalam fungsi `hildreth.lu.func`, serta dilanjutkan dengan pengujian autokorelasi dengan uji Durbin-Watson. Namun, setelah pengecekan tersebut tidak lupa koefisien regresi tersebut digunakan untuk transformasi balik. Persamaan hasil transformasi itulah yang menjadi persamaan sesungguhnya.
+
+```{r}
+#Model terbaik
+modelHL <- hildreth.lu.func(0.291, model)
+summary(modelHL)
+```
+
+Setelah dilakukan tranformasi balik, didapatkan model dengan metode Hildreth-Lu sebagai berikut. $$AQI=-4.51422+0.01822CO2+7.95490SO2+0.47974O3-0.02335PM10+0.69573PM25$$
+
+```{r}
+#Deteksi autokorelasi
+dwtest(modelHL)
+```
+
+Hasil uji Durbin-Watson juga menunjukkan bawah nilai DW sebesar $2.3914$ berada pada selang daerah tidak ada autokorelasi (inkonklusif), yaitu pada rentang DU \< DW \< 4-DU atau $ 1.473 < DW < 1.7688$. Hal tersebut juga didukung oleh *p-value* sebesar $0.8677$, di mana *p-value* (0.8677) \> $\alpha$=5%. Artinya tak tolak $H_0$ atau belum cukup bukti menyatakan bahwa ada autokorelasi dalam data nilai AQI dengan metode Hildreth-Lu pada taraf nyata 5%.
+
+Terakhir, akan dibandingkan nilai SSE dari ketiga metode (metode awal, metode Cochrane-Orcutt, dan Hildreth-Lu).
+
+```{r}
+#Perbandingan
+sseModelawal <- anova(model)$`Sum Sq`[-c(1,2,3,4,5)]
+sseModelCO <- anova(modelCOmanual)$`Sum Sq`[-c(1,2,3,4,5)]
+sseModelHL <- anova(modelHL)$`Sum Sq`[-c(1,2,3,4,5)]
+mseModelawal <- sseModelawal/length(AQI)
+mseModelCO <- sseModelCO/length(AQI)
+mseModelHL <- sseModelHL/length(AQI)
+akurasi <- matrix(c(sseModelawal,sseModelCO,sseModelHL,
+                    mseModelawal,mseModelCO,mseModelHL),nrow=2,ncol=3,byrow = T)
+colnames(akurasi) <- c("Model Awal", "Model Cochrane-Orcutt", "Model Hildreth-Lu")
+row.names(akurasi) <- c("SSE","MSE")
+akurasi
+```
+
+Berdasarkan hasil tersebut dapat diketahui bahwa hasil penanganan autokorelasi dengan metode Cochrane-Orcutt dan Hildreth-Lu memiliki SSE yang sama, sebesar $7.13665059$ dan lebih baik dibandingkan model awal ketika autokorelasi masih terjadi, yaitu sebesar $8.8475232$.
+
+# Simpulan
+
+Autokorelasi yang terdapat pada data AQI terjadi akibat adanya korelasi di antara unsur penyusunnya. Adanya autokorelasi menyebabkan model regresi kurang baik karena akan meingkatkan galatnya. Autokorelasi dapat dideteksi secara eksploratif melalui plot sisaan, ACF, dan PACF, serta dengan uji formal Durbin-Watson. Namun, autokorelasi tersebut dapat ditangani dengan metode Cochrane-Orcutt dan Hildreth-Lu. Kedua metode menghasilkan nilai SSE yang sama, artinya keduanya baik untuk digunakan.
