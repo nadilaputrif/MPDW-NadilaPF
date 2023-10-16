@@ -1,0 +1,274 @@
+---
+title: "Pertemuan 7"
+author: "Nadila Putri Fauziyyah - G1401211028"
+date: "2023-10-11"
+output: html_document
+---
+
+## Packages
+
+```{r, warning=FALSE,message=FALSE}
+library(ggplot2)
+library(tsibble)
+library(tseries)
+library(MASS)
+library(forecast)
+library(TSA)
+library(TTR)
+library(aTSA)
+library(graphics)
+```
+
+## Input Data
+```{r, warning=FALSE,message=FALSE}
+data1 <- rio::import("https://raw.githubusercontent.com/nadilaputrif/MPDW-NadilaPF/main/Data/Data_suhu.csv")
+data1
+```
+
+### Eksplorasi Data
+
+#### Plot Data Penuh
+
+```{r, warning=FALSE,message=FALSE}
+data1.ts <-ts(data1$Suhu)
+plot.ts(data1.ts, lty=1, xlab="waktu", ylab="Kurs", main="Plot Data Kurs")
+```
+
+Berdasarkan plot data deret waktu, terlihat bahwa data cenderung stasioner. Berdasarkan pola data, pembagian data latih dan data uji ditetapkan dengan proporsi 80%:20%
+
+#### Plot Data Latih
+
+```{r, warning=FALSE,message=FALSE}
+train<-data1.ts[1:127]
+train.ts<-ts(train)
+plot.ts(train.ts, lty=1, xlab="waktu", ylab="Kurs", main="Plot Kurs Train")
+```
+
+Berdasarkan plot data deret waktu pada data latih, terlihat bahwa data stasioner.
+
+#### Plot Data Uji
+
+```{r, warning=FALSE,message=FALSE}
+test<-data1.ts[128:156]
+test.ts<-ts(test)
+plot.ts(test.ts, lty=1, xlab="waktu", ylab="Kurs", main="Plot Kurs Test")
+```
+
+### Uji Stasioneritas Data
+
+#### Plot ACF
+
+```{r}
+acf(train.ts)
+```
+
+Berdasarkan plot ACF, terlihat bahwa plot ACF data *tails of* dan membentuk pola sinus.
+
+#### Uji ADF
+
+```{r}
+tseries::adf.test(train.ts)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.02351 yang lebih kecil dari taraf nyata 5% sehingga tolak $H_0$ dan menandakan bahwa data stasioner dalam rataan. 
+
+#### Plot Box-Cox
+
+```{r}
+index <- seq(1:127)
+bc = boxcox(train.ts~index, lambda = seq(-8,2,by=0.1))
+#Nilai Rounded Lambda
+lambda <- bc$x[which.max(bc$y)]
+lambda
+#SK
+bc$x[bc$y > max(bc$y) - 1/2 * qchisq(.95,1)]
+```
+
+Plot Boxcox menunjukkan nilai *rounded value* ($\lambda$) optimum sebesar **-3** dan pada selang kepercayaan 95% nilai memiliki batas bawah **-7.9** dan batas atas **1.8**. Selang tersebut memuat nilai satu sehingga dapat dikatakan bahwa data stasioner dalam ragam.
+
+### Identifikasi Model
+
+#### Plot ACF
+
+```{r}
+acf(train.ts)
+```
+
+Berdasarkan plot tersebut, terlihat bahwa plot ACF cenderung *cuts off* pada lag ke 1, sehingga jika plot PACF dianggap *tails of*, maka model tentatifnya adalah ARIMA(0,0,1).
+
+#### Plot PACF
+
+```{r}
+pacf(train.ts)
+```
+
+Berdasarkan plot tersebut, terlihat bahwa plot PACF cenderung *cuts off* pada lag ke 3, sehingga jika plot ACF dianggap *tails of*, maka model tentatifnya adalah ARIMA(3,0,0).
+
+Jika baik plot ACF maupun plot PACF keduanya dianggap tails of, maka model yang terbentuk adalah ARIMA(3,0,1)
+
+#### Plot EACF
+
+```{r}
+eacf(train.ts)
+```
+
+Identifikasi model menggunakan plot EACF dilakukan dengan melihat ujung segitiga pada pola segitiga nol. Dalam hal ini model tentatif yang terbentuk adalah ARIMA(2,0,2), ARIMA(3,0,2).
+
+### Pendugaan Parameter Model Tentatif
+
+#### ARIMA(0,0,1)
+
+```{r}
+model1.da=Arima(train.ts, order=c(0,0,1),method="ML")
+summary(model1.da) #AIC=222.94
+lmtest::coeftest(model1.da) #seluruh parameter signifikan
+```
+
+#### ARIMA(3,0,0)
+
+```{r}
+model2.da=Arima(train.ts, order=c(3,0,0),method="ML")
+summary(model2.da) #AIC=204.5
+lmtest::coeftest(model2.da) #seluruh parameter signifikan
+```
+
+#### ARIMA(3,0,2)
+
+```{r}
+model3.da=Arima(train.ts, order=c(3,0,2),method="ML")
+summary(model3.da) #AIC=178.17
+lmtest::coeftest(model3.da) #seluruh parameter signifikan
+```
+
+#### ARIMA(3,0,1)
+
+```{r}
+model4.da=Arima(train.ts, order=c(3,0,1),method="ML")
+summary(model4.da) #AIC=205.33
+lmtest::coeftest(model4.da) #ar3 dan intersep yang signifikan
+```
+
+Berdasarkan pendugaan parameter di atas, nilai AIC terkecil dimiliki oleh model ARIMA(3,0,2)dengan seluruhnya signifikan sehingga model yang dipilih adalah model ARIMA(3,0,2).
+
+### Analisis Sisaan
+
+#### Eksplorasi Sisaan
+
+```{r}
+#Eksplorasi 
+sisaan.da <- model3.da$residuals 
+par(mfrow=c(2,2)) 
+qqnorm(sisaan.da) 
+qqline(sisaan.da, col = "blue", lwd = 2) 
+plot(c(1:length(sisaan.da)),sisaan.da) 
+acf(sisaan.da) 
+pacf(sisaan.da) 
+par(mfrow = c(1,1))
+```
+
+Berdasarkan plot kuantil-kuantil normal, secara eksplorasi ditunjukkan sisaan tidak menyebar normal ditandai dengan titik titik yang cenderung tidak mengikuti garis $45^{\circ}$. Kemudian dapat dilihat juga lebar pita sisaan yang cenderung tidak sama menandakan bahwa sisaan memiliki ragam yang heterogen. Plot ACF dan PACF sisaan ARIMA(0,0,2) juga tidak signifikan pada 20 lag awal yang menandakan saling bebas. Kondisi ini akan diuji lebih lanjut dengan uji formal.
+
+#### Uji Formal
+
+```{r}
+#1) Sisaan Menyebar Normal 
+ks.test(sisaan.da,"pnorm")  #tak tolak H0 > sisaan menyebar normal
+```
+
+Selain dengan eksplorasi, asumsi tersebut dapat diuji menggunakan uji formal. Pada tahapan ini uji formal yang digunakan untuk normalitas adalah uji Kolmogorov-Smirnov (KS). Hipotesis pada uji KS adalah sebagai berikut.
+
+$H_0$ : Sisaan menyebar normal
+
+$H_1$ : Sisaan tidak menyebar normal
+
+Berdasarkan uji KS tersebut, didapat *p-value* yang kurang dari taraf nyata 5% sehingga tolak $H_0$ dan menandakan bahwa sisaan tidak menyebar normal. Hal ini sesuai dengan hasil eksplorasi menggunakan plot kuantil-kuantil normal.
+
+```{r}
+#2) Sisaan saling bebas/tidak ada autokorelasi 
+Box.test(sisaan.da, type = "Ljung")  #tak tolak H0 > sisaan saling bebas
+```
+
+Selanjutnya akan dilakukan uji formal untuk kebebasan sisaan menggunakan uji Ljung-Box. Hipotesis yang digunakan adalah sebagai berikut.
+
+$H_0$ : Sisaan saling bebas
+
+$H_1$ : Sisaan tidak tidak saling bebas
+
+Berdasarkan uji Ljung-Box tersebut, didapat *p-value* sebesar 0.9528 yang lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan bahwa sisaan saling bebas. Hal ini berbeda dengan eksplorasi.
+
+```{r}
+#3) Sisaan homogen 
+Box.test((sisaan.da)^2, type = "Ljung")  #tak tolak H0 > sisaan homogen
+```
+
+Hipotesis yang digunakan untuk uji kehomogenan ragam adalah sebagai berikut.
+
+$H_0$ : Ragam sisaan homogen
+
+$H_1$ : Ragam sisaan tidak homogen
+
+Berdasarkan uji Ljung-Box terhadap sisaan kuadrat tersebut, didapat *p-value* sebesar 0.3719 yang lebih dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan bahwa ragam sisaan homogen.
+
+```{r}
+#4) Nilai tengah sisaan sama dengan nol 
+t.test(sisaan.da, mu = 0, conf.level = 0.95)  #tak tolak h0 > nilai tengah sisaan sama dengan 0
+```
+
+Terakhir, dengan uji-t, akan dicek apakah nilai tengah sisaan sama dengan nol. Hipotesis yang diujikan sebagai berikut.
+
+$H_0$ : nilai tengah sisaan sama dengan 0
+
+$H_1$ : nilai tengah sisaan tidak sama dengan 0
+
+Berdasarkan uji-ttersebut, didapat *p-value* sebesar 0.9634 yang lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan bahwa nilai tengah sisaan sama dengan nol. Hal ini berbeda dengan eksplorasi.
+
+### Overfitting
+Kandidat model *overfitting* adalah ARIMA(4,0,2) dan ARIMA(3,0,3).
+
+#### ARIMA(4,0,2)
+
+```{r}
+model5.da=Arima(train.ts, order=c(4,0,2),method="ML")
+summary(model5.da) #AIC=180.15
+lmtest::coeftest(model5.da) #ar4 tidak signifikan
+```
+#### ARIMA(3,0,3)
+
+```{r}
+model6.da=Arima(train.ts, order=c(3,0,3),method="ML")
+summary(model6.da) #AIC=204.83
+lmtest::coeftest(model6.da) #tidak semua signifikan
+```
+Model Arima(3,0,2) tetap yang akan dipilih.
+
+### Peramalan
+
+Peramalan berikut ini dilakukan untuk 29 hari ke depan.
+
+```{r}
+#---FORECAST---#
+ramalan.da <- forecast::forecast(model3.da, h = 29) 
+ramalan.da
+data.ramalan.da <- ramalan.da$mean
+plot(ramalan.da)
+```
+
+Berdasarkan hasil plot ramalan di atas, dapat dilihat bahwa ramalan ARIMA(0,012) cenderung stabil hingga akhir periode. Selanjutnya, dapat dicari nilai akurasi antara hasil ramalan dengan data uji sebagai berikut.
+
+```{r}
+pt_1 <- train.ts[127] #nilai akhir data latih
+hasil.forc <- data.ramalan.da
+ts.plot(train.ts,hasil.forc)
+```
+
+```{r}
+perbandingan <- matrix(data=c(test.ts, hasil.forc),
+                     nrow = length(test.ts), ncol = 2)
+colnames(perbandingan) <- c("Aktual","Hasil Forecast")
+perbandingan
+accuracy(hasil.forc[1:29], head(test.ts,n=length(test.ts)))
+```
